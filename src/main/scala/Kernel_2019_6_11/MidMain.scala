@@ -1,6 +1,11 @@
 package Kernel_2019_6_11
 
 import java.util.concurrent._
+import java.io.PrintWriter
+import java.io.File
+import java.util.Date
+
+import scala.io.Source
 
 import Kernel_2019_6_11.allTheMapOperation.{ColUtils, OneValIterator}
 import com.esotericsoftware.kryo.Kryo
@@ -13,8 +18,21 @@ import org.apache.spark.storage.StorageLevel
 
 
 object MidMain {
-
   def main(args: Array[String]): Unit = {
+    var allCsv = Array("pcmac")
+    for(i <- 0 to allCsv.length-1){
+      var resName = allCsv(i)
+      var resFile = "C:\\Users\\qly\\Desktop\\"+resName+".txt"
+      var result = run(resName)
+      val writer = new PrintWriter(new File(resFile))
+      print(result)
+      writer.write(result)
+      writer.close()
+    }
+
+  }
+
+  def run(csvName: String): String = {
     Logger.getLogger("org").setLevel(Level.ERROR)
     val conf=new SparkConf().registerKryoClasses(Array(
       classOf[(Seq[Int],Int)]
@@ -26,7 +44,8 @@ object MidMain {
     val sparkSession = SparkSession
       .builder()
       .config("spark.task.maxFailures","0")
-      .config("spark.default.parallelism",375)
+      // .config("spark.default.parallelism",375)
+      .config("spark.executor.memoryOverhead",4096)
       //.config("spark.driver.maxResultSize", "1g")
       //.config("spark.storage.memoryFraction","0.3")
       .config("spark.shuffle.memoryFraction","0.3")
@@ -39,18 +58,20 @@ object MidMain {
       .config(conf)
       .appName("kernel")
       //.master("spark://master:7077")
-      .master("local")
+      .master("local[12]")
       .getOrCreate()
 
+    // on hdfs
     //val fileData=sparkSession.read.parquet("hdfs://master:9000/bigdata/DS4.parquet")
     //println(fileData.count())
-    ////local test code
+    //on single machine
         val fileData = sparkSession
           .read.format("csv")
           .option("header","true")
-          .load("C:\\Users\\qly\\Desktop\\testdata.csv")
+          .load("C:\\Users\\qly\\Desktop\\第一篇论文\\小数据集\\"+csvName+".csv")
     var sourceSchema = Seq[String]()
     val attnum=fileData.schema.length
+
     var resultString=""
     //记录表的schema
     for(i <- 0 to attnum-1){
@@ -59,7 +80,6 @@ object MidMain {
 
     //全表转为int型
     val sourceData=fileData.select(sourceSchema.map(name => fileData.col(name).cast(IntegerType)):_*)
-
     val kv1Rdd=sourceData.rdd.mapPartitions(it=>new OneValIterator(it))
     //去除冲突行
     val discreNum=10
@@ -68,23 +88,16 @@ object MidMain {
         discreNum
       else
         a
-    }).persist(StorageLevel.MEMORY_AND_DISK_SER)
+    })
+    seqRdd.cache()
     println("cached rdd lineNum:"+seqRdd.count)
+    var start_time =new Date().getTime
 
     //判断属性删除还是保留
     val deleteAtt=new Array[Boolean](attnum-1)
     var calIndex=attnum-2
     val mainLock = new CountDownLatch(attnum-1)
     var stopCutFlag=false
-
-    /*******************test code****************************
-    calIndex=50
-    for(i<-50 to attnum-2){
-      deleteAtt.update(i,true)
-    }
-      ***************************************/
-
-    //println("start cal")
 
     class FindCoreException extends Exception
     class CalThread(i:Int,startFlag:Boolean) extends Callable[Boolean]{
@@ -110,7 +123,8 @@ object MidMain {
             else
               a
           })
-          println(reducedrdd.count+"times"+calIndex)
+          reducedrdd.count
+//          println(reducedrdd.count+"times"+calIndex)
           //正常遍历完，说明不是核属性，且之前没有在切割，下一次要删除这一列
           if(stopCutFlag){
             deleteAtt.update(calIndex,true)
@@ -170,9 +184,11 @@ object MidMain {
     //等待线程池运算完毕
     mainLock.await
     println("是核属性的属性有："+resultString)
-
+    var end_time =new Date().getTime
+    var gap = end_time-start_time
+    println(gap)
     //防止运算完后自动关闭webui
-    while (true){}
+    return resultString+", time = "+gap+" ms"
   }
 }
 
